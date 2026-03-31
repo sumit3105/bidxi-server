@@ -40,11 +40,18 @@ func main() {
 		log.Printf("⚠️  Warning: Failed to ensure indexes: %v", err)
 	}
 
+	lobbyRepo := repository.NewLobbyRepository()
+	if err := lobbyRepo.EnsureIndexes(context.Background()); err != nil {
+		log.Printf("⚠️  Warning: Failed to ensure lobby indexes: %v", err)
+	}
+
 	// Initialize services (dependency injection)
 	authService := service.NewAuthService(userRepo)
+	lobbyService := service.NewLobbyService(lobbyRepo, userRepo)
 
 	// Initialize handlers
 	authHandler := handler.NewAuthHandler(authService)
+	lobbyHandler := handler.NewLobbyHandler(lobbyService)
 
 	// Initialize rate limiter
 	rateLimiter := middleware.NewRateLimiter(config.AppConfig.RateLimitRPM)
@@ -84,6 +91,7 @@ func main() {
 	protected := api.Group("")
 	protected.Use(middleware.AuthMiddleware())
 	authHandler.RegisterProtectedRoutes(protected)
+	lobbyHandler.RegisterRoutes(protected)
 
 	// Start the server with graceful shutdown
 	addr := fmt.Sprintf(":%s", config.AppConfig.Port)

@@ -14,22 +14,26 @@ import (
 // and injects user claims into the Gin context for downstream handlers.
 func AuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		tokenString := ""
+		
 		authHeader := c.GetHeader("Authorization")
-		if authHeader == "" {
-			utils.RespondError(c, http.StatusUnauthorized, "Authorization header is required")
+		if authHeader != "" {
+			parts := strings.SplitN(authHeader, " ", 2)
+			if len(parts) == 2 && strings.ToLower(parts[0]) == "bearer" {
+				tokenString = parts[1]
+			}
+		}
+
+		// Fallback for WebSockets which can't send headers
+		if tokenString == "" {
+			tokenString = c.Query("token")
+		}
+
+		if tokenString == "" {
+			utils.RespondError(c, http.StatusUnauthorized, "Authorization token is required")
 			c.Abort()
 			return
 		}
-
-		// Expect "Bearer <token>"
-		parts := strings.SplitN(authHeader, " ", 2)
-		if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
-			utils.RespondError(c, http.StatusUnauthorized, "Authorization header must be 'Bearer <token>'")
-			c.Abort()
-			return
-		}
-
-		tokenString := parts[1]
 
 		claims, err := utils.ValidateToken(tokenString, config.AppConfig.JWTSecret)
 		if err != nil {
