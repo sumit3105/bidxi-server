@@ -38,6 +38,7 @@ func (h *LobbyHandler) RegisterRoutes(rg *gin.RouterGroup) {
 		lobbies.GET(":id/squads", h.GetLobbySquads)
 		lobbies.POST(":id/bid", h.PlaceBid)
 		lobbies.POST(":id/auction/toggle", h.ToggleAuction)
+		lobbies.GET(":id/all-players", h.GetAllPlayers)
 	}
 	// NOTE: join-by-code is intentionally at /api/join-by-code (not /api/lobbies/join-by-code)
 	// because Gin's httprouter cannot mix static paths and wildcard params at the same
@@ -268,6 +269,15 @@ func (h *LobbyHandler) GetLobbySquads(c *gin.Context) {
 		return
 	}
 	utils.RespondSuccess(c, http.StatusOK, "Squads fetched", data)
+}
+
+func (h *LobbyHandler) GetAllPlayers(c *gin.Context) {
+	data, err := h.lobbyService.GetAllPlayers(c.Request.Context())
+	if err != nil {
+		utils.RespondError(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	utils.RespondSuccess(c, http.StatusOK, "Players fetched", data)
 }
 
 func (h *LobbyHandler) ToggleAuction(c *gin.Context) {

@@ -25,11 +25,11 @@ type JoinByCodeRequest struct {
 
 // ParticipantDTO is returned in lobby responses.
 type ParticipantDTO struct {
-	UserID         string `json:"userId"`
-	Username       string `json:"username"`
-	TeamName       string `json:"teamName"`
-	IplTeam        string `json:"iplTeam"`
-	PurseRemaining int    `json:"purseRemaining"`
+	UserID         string  `json:"userId"`
+	Username       string  `json:"username"`
+	TeamName       string  `json:"teamName"`
+	IplTeam        string  `json:"iplTeam"`
+	PurseRemaining float64 `json:"purseRemaining"`
 }
 
 // LobbyResponse is the public representation of a lobby.
@@ -39,7 +39,7 @@ type LobbyResponse struct {
 	AdminID      string           `json:"adminId"`
 	InviteCode   string           `json:"inviteCode"`
 	MaxPlayers   int              `json:"maxPlayers"`
-	Purse        int              `json:"purse"`
+	Purse        float64          `json:"purse"`
 	Status       string           `json:"status"`
 	Participants []ParticipantDTO `json:"participants"`
 	CreatedAt    string           `json:"createdAt"`

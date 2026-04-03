@@ -30,6 +30,7 @@ type LobbyService interface {
 	PlaceBid(ctx context.Context, lobbyID string, userID string, amount int) error
 	HandleHostPresenceChange(ctx context.Context, lobbyID string, isPresent bool) error
 	GetLobbySquads(ctx context.Context, lobbyID string) (interface{}, error)
+	GetAllPlayers(ctx context.Context) (interface{}, error)
 }
 
 type lobbyService struct {
@@ -66,7 +67,7 @@ func (s *lobbyService) CreateLobby(ctx context.Context, userID string, req *dto.
 		Username:       username,
 		TeamName:       strings.TrimSpace(req.TeamName),
 		IplTeam:        req.IplTeam,
-		PurseRemaining: req.Purse,
+		PurseRemaining: req.Purse * 100, // Store in Lakhs
 		JoinedAt:       time.Now(),
 	}
 
@@ -75,7 +76,7 @@ func (s *lobbyService) CreateLobby(ctx context.Context, userID string, req *dto.
 		AdminID:      userObjID,
 		InviteCode:   inviteCode,
 		MaxPlayers:   req.MaxPlayers,
-		Purse:        req.Purse,
+		Purse:        req.Purse * 100, // Store in Lakhs
 		Status:       "waiting",
 		Participants: []models.Participant{adminParticipant},
 	}
@@ -154,7 +155,7 @@ func (s *lobbyService) JoinLobby(ctx context.Context, userID string, lobbyID str
 		Username:       username,
 		TeamName:       strings.TrimSpace(req.TeamName),
 		IplTeam:        req.IplTeam,
-		PurseRemaining: lobby.Purse,
+		PurseRemaining: lobby.Purse, // Already in Lakhs
 		JoinedAt:       time.Now(),
 	}
 
@@ -272,8 +273,13 @@ func (s *lobbyService) StartAuction(ctx context.Context, userID string, lobbyID 
 		return http.StatusNotFound, fmt.Errorf("lobby not found")
 	}
 	if lobby.AdminID.Hex() != userID {
-		return http.StatusForbidden, fmt.Errorf("only lobby admin can start auction")
+		return http.StatusForbidden, fmt.Errorf("only lobby admin can start the auction")
 	}
+
+	if len(lobby.Participants) < 2 {
+		return http.StatusBadRequest, fmt.Errorf("need at least 2 participants to start the auction")
+	}
+
 	if lobby.Status != "waiting" {
 		return http.StatusConflict, fmt.Errorf("auction already started or completed")
 	}
@@ -350,7 +356,7 @@ func toLobbyDTO(lobby *models.Lobby) *dto.LobbyResponse {
 			Username:       p.Username,
 			TeamName:       p.TeamName,
 			IplTeam:        p.IplTeam,
-			PurseRemaining: p.PurseRemaining,
+			PurseRemaining: float64(p.PurseRemaining) / 100.0,
 		})
 	}
 
@@ -360,7 +366,7 @@ func toLobbyDTO(lobby *models.Lobby) *dto.LobbyResponse {
 		AdminID:      lobby.AdminID.Hex(),
 		InviteCode:   lobby.InviteCode,
 		MaxPlayers:   lobby.MaxPlayers,
-		Purse:        lobby.Purse,
+		Purse:        float64(lobby.Purse) / 100.0,
 		Status:       lobby.Status,
 		Participants: participants,
 		CreatedAt:    lobby.CreatedAt.Format("2006-01-02T15:04:05Z"),
@@ -420,12 +426,19 @@ func (s *lobbyService) GetLobbySquads(ctx context.Context, lobbyID string) (inte
 		}
 
 		result = append(result, map[string]interface{}{
-			"userID":         p.UserID.Hex(),
+			"userId":         p.UserID.Hex(),
 			"teamName":       p.TeamName,
 			"iplTeam":        p.IplTeam,
-			"purseRemaining": p.PurseRemaining,
+			"purseRemaining": float64(p.PurseRemaining) / 100.0,
 			"squad":          enrichedPlayers,
 		})
 	}
 	return result, nil
+}
+func (s *lobbyService) GetAllPlayers(ctx context.Context) (interface{}, error) {
+	players, err := s.auctionService.(*auctionService).playerRepo.GetAll(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return players, nil
 }

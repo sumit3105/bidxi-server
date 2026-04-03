@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"fmt"
+	"log"
 	"math/rand"
+	"strings"
 	"sync"
 	"time"
 
@@ -49,11 +51,14 @@ func (s *auctionService) InitializeAuction(ctx context.Context, lobbyID string) 
 		return nil, err
 	}
 
-	// 1. Group by category
+	// 1. Group by category (normalized uppercase)
 	categories := []string{"MARQUEE", "WK", "BATSMAN", "ALLROUNDER", "BOWLER"}
 	grouped := make(map[string][]primitive.ObjectID)
+	usedIDs := make(map[primitive.ObjectID]bool)
+
 	for _, p := range allPlayers {
-		grouped[p.Category] = append(grouped[p.Category], p.ID)
+		cat := strings.ToUpper(p.Category)
+		grouped[cat] = append(grouped[cat], p.ID)
 	}
 
 	// 2. Shuffle each group and concatenate
@@ -62,11 +67,33 @@ func (s *auctionService) InitializeAuction(ctx context.Context, lobbyID string) 
 
 	for _, cat := range categories {
 		ids := grouped[cat]
+		if len(ids) == 0 {
+			continue
+		}
 		r.Shuffle(len(ids), func(i, j int) {
 			ids[i], ids[j] = ids[j], ids[i]
 		})
-		finalQueue = append(finalQueue, ids...)
+		for _, id := range ids {
+			finalQueue = append(finalQueue, id)
+			usedIDs[id] = true
+		}
 	}
+
+	// 3. Catch-all for any players not in the above categories
+	extraIDs := []primitive.ObjectID{}
+	for _, p := range allPlayers {
+		if !usedIDs[p.ID] {
+			extraIDs = append(extraIDs, p.ID)
+		}
+	}
+	if len(extraIDs) > 0 {
+		r.Shuffle(len(extraIDs), func(i, j int) {
+			extraIDs[i], extraIDs[j] = extraIDs[j], extraIDs[i]
+		})
+		finalQueue = append(finalQueue, extraIDs...)
+	}
+
+	log.Printf("✨ Initialized auction with %d players in queue", len(finalQueue))
 
 	lid, _ := primitive.ObjectIDFromHex(lobbyID)
 	room := &models.AuctionRoom{
@@ -135,7 +162,6 @@ func (s *auctionService) ToggleAuctionState(ctx context.Context, lobbyID string,
 		}
 		room.PlayerQueue = append(room.PlayerQueue, room.UnsoldPlayers...)
 		room.UnsoldPlayers = nil
-		room.Status = "bidding"
 		return s.SetNextPlayer(ctx, lobbyID)
 
 	default:
@@ -256,12 +282,12 @@ func (s *auctionService) PlaceBid(ctx context.Context, lobbyID string, userID st
 				if sqP.Nationality != "Indian" {
 					overseasCount++
 				}
-				switch sqP.Role {
-				case "WK":
+				role := strings.ToUpper(sqP.Role)
+				if strings.Contains(role, "WK") {
 					wkCount++
-				case "BOWL", "BOWLER":
+				} else if strings.Contains(role, "BOWL") {
 					bowlCount++
-				case "BAT", "BATSMAN":
+				} else if strings.Contains(role, "BAT") {
 					batCount++
 				}
 			}
@@ -372,20 +398,39 @@ func (s *auctionService) handleTimerTick(lobbyID string) {
 func (s *auctionService) handlePlayerSold(ctx context.Context, room *models.AuctionRoom) {
 	room.Status = "sold"
 	player, _ := s.playerRepo.GetByID(ctx, room.CurrentPlayerID.Hex())
+	if player == nil {
+		log.Printf("❌ Panic Avoided: Player %s not found in handlePlayerSold", room.CurrentPlayerID.Hex())
+		room.Status = "unsold"
+		s.auctionRepo.Update(ctx, room)
+		return
+	}
+
 	lobby, _ := s.lobbyRepo.GetByID(ctx, room.LobbyID.Hex())
 	for i, p := range lobby.Participants {
 		if p.UserID == room.HighestBidderID {
-			lobby.Participants[i].PurseRemaining -= room.CurrentBid / 100
+			lobby.Participants[i].PurseRemaining -= room.CurrentBid
 			lobby.Participants[i].Squad = append(lobby.Participants[i].Squad, room.CurrentPlayerID)
+
+			// Update lobby FIRST to ensure persistence of the sale
+			if err := s.lobbyRepo.UpdateParticipants(ctx, room.LobbyID.Hex(), lobby.Participants); err != nil {
+				log.Printf("❌ Failed to update participants: %v", err)
+			}
+
 			record := models.SoldRecord{
-				PlayerID: room.CurrentPlayerID, PlayerName: player.Name, PlayerImage: player.ImageUrl, PlayerRole: player.Role,
-				WinnerID: room.HighestBidderID, TeamName: p.TeamName, IplTeam: p.IplTeam, SoldPrice: room.CurrentBid, SoldAt: time.Now(),
+				PlayerID:    room.CurrentPlayerID,
+				PlayerName:  player.Name,
+				PlayerImage: player.ImageUrl,
+				PlayerRole:  player.Role,
+				WinnerID:    room.HighestBidderID,
+				TeamName:    p.TeamName,
+				IplTeam:     p.IplTeam,
+				SoldPrice:   room.CurrentBid,
+				SoldAt:      time.Now(),
 			}
 			room.SoldPlayers = append(room.SoldPlayers, record)
 			break
 		}
 	}
-	s.lobbyRepo.UpdateParticipants(ctx, room.LobbyID.Hex(), lobby.Participants)
 	s.auctionRepo.Update(ctx, room)
 	s.stopTimer(room.LobbyID.Hex()) // Stop timer on sale
 	websocket.GlobalHub.BroadcastToLobby(room.LobbyID.Hex(), "PLAYER_SOLD", map[string]interface{}{"room": room, "winnerId": room.HighestBidderID.Hex()})
