@@ -45,9 +45,19 @@ func main() {
 		log.Printf("⚠️  Warning: Failed to ensure lobby indexes: %v", err)
 	}
 
+	playerRepo := repository.NewPlayerRepository()
+	auctionRepo := repository.NewAuctionRepository()
+
 	// Initialize services (dependency injection)
 	authService := service.NewAuthService(userRepo)
-	lobbyService := service.NewLobbyService(lobbyRepo, userRepo)
+	playerService := service.NewPlayerService(playerRepo)
+	auctionService := service.NewAuctionService(auctionRepo, lobbyRepo, playerRepo)
+	lobbyService := service.NewLobbyService(lobbyRepo, userRepo, auctionService)
+
+	// Seed initial player data
+	if err := playerService.SeedInitialPlayers(context.Background()); err != nil {
+		log.Printf("⚠️  Warning: Failed to seed players: %v", err)
+	}
 
 	// Initialize handlers
 	authHandler := handler.NewAuthHandler(authService)

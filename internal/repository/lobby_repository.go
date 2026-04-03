@@ -25,6 +25,7 @@ type LobbyRepository interface {
 	AddParticipant(ctx context.Context, lobbyID string, participant models.Participant) error
 	RemoveParticipant(ctx context.Context, lobbyID string, userID string) error
 	UpdateStatus(ctx context.Context, lobbyID string, status string) error
+	UpdateParticipants(ctx context.Context, lobbyID string, participants []models.Participant) error
 	EnsureIndexes(ctx context.Context) error
 }
 
@@ -162,6 +163,18 @@ func (r *lobbyRepository) UpdateStatus(ctx context.Context, lobbyID string, stat
 		return fmt.Errorf("lobby not found")
 	}
 	return nil
+}
+
+func (r *lobbyRepository) UpdateParticipants(ctx context.Context, lobbyID string, participants []models.Participant) error {
+	objectID, err := primitive.ObjectIDFromHex(lobbyID)
+	if err != nil {
+		return fmt.Errorf("invalid lobby ID: %w", err)
+	}
+
+	filter := bson.M{"_id": objectID}
+	update := bson.M{"$set": bson.M{"participants": participants}}
+	_, err = r.collection().UpdateOne(ctx, filter, update)
+	return err
 }
 
 func (r *lobbyRepository) EnsureIndexes(ctx context.Context) error {

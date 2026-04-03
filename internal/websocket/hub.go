@@ -30,6 +30,14 @@ type Client struct {
 	Conn    *websocket.Conn
 	LobbyID string
 	UserID  string
+	writeMu sync.Mutex
+}
+
+// SafeWrite sends a message to this client with write-mutex protection.
+func (c *Client) SafeWrite(data []byte) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return c.Conn.WriteMessage(websocket.TextMessage, data)
 }
 
 // AddClient adds a new client to the hub
@@ -48,6 +56,7 @@ func (h *Hub) AddClient(c *Client) {
 
 	h.clients[c.LobbyID][c.UserID] = c
 	log.Printf("User %s joined WebSocket for lobby %s", c.UserID, c.LobbyID)
+	go h.BroadcastOnlineUsers(c.LobbyID)
 }
 
 // RemoveClient removes a client from the hub
@@ -63,8 +72,25 @@ func (h *Hub) RemoveClient(c *Client) {
 				delete(h.clients, c.LobbyID)
 			}
 			log.Printf("User %s left WebSocket for lobby %s", c.UserID, c.LobbyID)
+			go h.BroadcastOnlineUsers(c.LobbyID)
 		}
 	}
+}
+
+// BroadcastOnlineUsers broadcasts the list of online user IDs to the lobby
+func (h *Hub) BroadcastOnlineUsers(lobbyID string) {
+	h.mu.RLock()
+	lobbyClients, ok := h.clients[lobbyID]
+	if !ok {
+		h.mu.RUnlock()
+		return
+	}
+	var userIDs []string
+	for uid := range lobbyClients {
+		userIDs = append(userIDs, uid)
+	}
+	h.mu.RUnlock()
+	h.BroadcastToLobby(lobbyID, "ONLINE_USERS", userIDs)
 }
 
 // BroadcastToLobby sends a message to all connected clients in a specific lobby
@@ -81,21 +107,58 @@ func (h *Hub) BroadcastToLobby(lobbyID string, eventType string, payload interfa
 	}
 
 	h.mu.RLock()
-	defer h.mu.RUnlock()
-
 	lobbyClients, ok := h.clients[lobbyID]
 	if !ok {
+		h.mu.RUnlock()
+		return
+	}
+	// Copy client list to avoid holding lock during writes
+	clients := make([]*Client, 0, len(lobbyClients))
+	for _, c := range lobbyClients {
+		clients = append(clients, c)
+	}
+	h.mu.RUnlock()
+
+	for _, client := range clients {
+		go func(c *Client) {
+			if err := c.SafeWrite(data); err != nil {
+				log.Printf("Error writing to WS user %s: %v", c.UserID, err)
+				c.Conn.Close()
+			}
+		}(client)
+	}
+}
+
+// SendToUser sends a message to a specific user in a lobby
+func (h *Hub) SendToUser(lobbyID string, userID string, eventType string, payload interface{}) {
+	msg := map[string]interface{}{
+		"type":    eventType,
+		"payload": payload,
+	}
+
+	data, err := json.Marshal(msg)
+	if err != nil {
+		log.Println("Error marshaling WS message:", err)
 		return
 	}
 
-	for _, client := range lobbyClients {
-		// Use a separate goroutine or non-blocking write to avoid blocking if one client is slow
-		go func(c *websocket.Conn) {
-			err := c.WriteMessage(websocket.TextMessage, data)
-			if err != nil {
-				log.Println("Error writing to WS:", err)
-				c.Close()
-			}
-		}(client.Conn)
+	h.mu.RLock()
+	lobbyClients, ok := h.clients[lobbyID]
+	if !ok {
+		h.mu.RUnlock()
+		return
 	}
+	client, exists := lobbyClients[userID]
+	h.mu.RUnlock()
+
+	if !exists {
+		return
+	}
+
+	go func(c *Client) {
+		if err := c.SafeWrite(data); err != nil {
+			log.Printf("Error writing to WS user %s: %v", c.UserID, err)
+			c.Conn.Close()
+		}
+	}(client)
 }

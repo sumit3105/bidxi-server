@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -33,6 +34,10 @@ func (h *LobbyHandler) RegisterRoutes(rg *gin.RouterGroup) {
 		lobbies.POST(":id/join", h.JoinLobby)
 		lobbies.DELETE(":id/participants/:uid", h.KickParticipant)
 		lobbies.POST(":id/start", h.StartAuction)
+		lobbies.GET(":id/auction", h.GetAuctionRoom)
+		lobbies.GET(":id/squads", h.GetLobbySquads)
+		lobbies.POST(":id/bid", h.PlaceBid)
+		lobbies.POST(":id/auction/toggle", h.ToggleAuction)
 	}
 	// NOTE: join-by-code is intentionally at /api/join-by-code (not /api/lobbies/join-by-code)
 	// because Gin's httprouter cannot mix static paths and wildcard params at the same
@@ -96,29 +101,36 @@ func (h *LobbyHandler) ConnectWebSocket(c *gin.Context) {
 		return
 	}
 
+	// Add client to hub
 	client := &websocket.Client{
 		Hub:     websocket.GlobalHub,
 		Conn:    conn,
 		LobbyID: lobbyID,
 		UserID:  userID.(string),
 	}
-
 	websocket.GlobalHub.AddClient(client)
 
-	// Keep connection alive until client closes or error
-	go func() {
-		defer func() {
-			websocket.GlobalHub.RemoveClient(client)
-			client.Conn.Close()
-		}()
+	// Host presence detection
+	lobby, _, _ := h.lobbyService.GetLobby(c.Request.Context(), lobbyID)
+	if lobby != nil && lobby.AdminID == userID.(string) {
+		h.lobbyService.HandleHostPresenceChange(c.Request.Context(), lobbyID, true)
+		defer h.lobbyService.HandleHostPresenceChange(context.Background(), lobbyID, false)
+	}
 
-		for {
-			_, _, err := client.Conn.ReadMessage()
-			if err != nil {
-				break
-			}
-		}
+	defer websocket.GlobalHub.RemoveClient(client)
+
+	// Keep connection alive until client closes or error
+	defer func() {
+		websocket.GlobalHub.RemoveClient(client)
+		client.Conn.Close()
 	}()
+
+	for {
+		_, _, err := client.Conn.ReadMessage()
+		if err != nil {
+			break
+		}
+	}
 }
 
 func (h *LobbyHandler) GetMyLobbies(c *gin.Context) {
@@ -216,5 +228,81 @@ func (h *LobbyHandler) StartAuction(c *gin.Context) {
 		return
 	}
 
-	utils.RespondSuccess(c, status, "Auction started", nil)
+	utils.RespondSuccess(c, status, "Auction started successfully", nil)
+}
+
+func (h *LobbyHandler) PlaceBid(c *gin.Context) {
+	lobbyID := c.Param("id")
+	userID, _ := c.Get("userID")
+
+	var req struct {
+		Amount int `json:"amount" binding:"required,gt=0"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.RespondValidationError(c, "Invalid bid amount", err)
+		return
+	}
+
+	if err := h.lobbyService.PlaceBid(c.Request.Context(), lobbyID, userID.(string), req.Amount); err != nil {
+		utils.RespondError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	utils.RespondSuccess(c, http.StatusOK, "Bid placed successfully", nil)
+}
+func (h *LobbyHandler) GetAuctionRoom(c *gin.Context) {
+	lobbyID := c.Param("id")
+	data, err := h.lobbyService.GetAuctionRoom(c.Request.Context(), lobbyID)
+	if err != nil {
+		utils.RespondError(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	utils.RespondSuccess(c, http.StatusOK, "Auction room fetched", data)
+}
+
+func (h *LobbyHandler) GetLobbySquads(c *gin.Context) {
+	lobbyID := c.Param("id")
+	data, err := h.lobbyService.GetLobbySquads(c.Request.Context(), lobbyID)
+	if err != nil {
+		utils.RespondError(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	utils.RespondSuccess(c, http.StatusOK, "Squads fetched", data)
+}
+
+func (h *LobbyHandler) ToggleAuction(c *gin.Context) {
+	lobbyID := c.Param("id")
+	userID, exists := c.Get("userID")
+	if !exists {
+		utils.RespondError(c, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	var req struct {
+		Action string `json:"action"` // start, pause, resume, next
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.RespondError(c, http.StatusBadRequest, "Invalid action")
+		return
+	}
+
+	// Verify Admin
+	lobby, status, err := h.lobbyService.GetLobby(c.Request.Context(), lobbyID)
+	if err != nil {
+		utils.RespondError(c, status, err.Error())
+		return
+	}
+
+	if lobby.AdminID != userID.(string) {
+		utils.RespondError(c, http.StatusForbidden, "Only admin can control auction")
+		return
+	}
+
+	err = h.lobbyService.ToggleAuction(c.Request.Context(), lobbyID, req.Action)
+	if err != nil {
+		utils.RespondError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	utils.RespondSuccess(c, http.StatusOK, "Auction state updated", nil)
 }

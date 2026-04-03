@@ -25,16 +25,22 @@ type LobbyService interface {
 	JoinByCode(ctx context.Context, userID string, req *dto.JoinByCodeRequest) (*dto.LobbyResponse, int, error)
 	KickParticipant(ctx context.Context, userID string, lobbyID string, participantID string) (int, error)
 	StartAuction(ctx context.Context, userID string, lobbyID string) (int, error)
+	ToggleAuction(ctx context.Context, lobbyID string, action string) error
+	GetAuctionRoom(ctx context.Context, lobbyID string) (interface{}, error)
+	PlaceBid(ctx context.Context, lobbyID string, userID string, amount int) error
+	HandleHostPresenceChange(ctx context.Context, lobbyID string, isPresent bool) error
+	GetLobbySquads(ctx context.Context, lobbyID string) (interface{}, error)
 }
 
 type lobbyService struct {
-	lobbyRepo repository.LobbyRepository
-	userRepo  repository.UserRepository
+	lobbyRepo      repository.LobbyRepository
+	userRepo       repository.UserRepository
+	auctionService AuctionService
 }
 
 // NewLobbyService initializes a LobbyService implementation.
-func NewLobbyService(lobbyRepo repository.LobbyRepository, userRepo repository.UserRepository) LobbyService {
-	return &lobbyService{lobbyRepo: lobbyRepo, userRepo: userRepo}
+func NewLobbyService(lobbyRepo repository.LobbyRepository, userRepo repository.UserRepository, auctionService AuctionService) LobbyService {
+	return &lobbyService{lobbyRepo: lobbyRepo, userRepo: userRepo, auctionService: auctionService}
 }
 
 func (s *lobbyService) CreateLobby(ctx context.Context, userID string, req *dto.CreateLobbyRequest) (*dto.LobbyResponse, int, error) {
@@ -239,11 +245,16 @@ func (s *lobbyService) KickParticipant(ctx context.Context, userID string, lobby
 		return http.StatusForbidden, fmt.Errorf("only lobby admin can kick participants")
 	}
 
+	// Send KICKED event to the participant BEFORE removing them
+	websocket.GlobalHub.SendToUser(lobbyID, participantID, "KICKED", map[string]string{
+		"reason": "You have been removed from the lobby by the host.",
+	})
+
 	if err := s.lobbyRepo.RemoveParticipant(ctx, lobbyID, participantID); err != nil {
 		return http.StatusInternalServerError, err
 	}
 
-	// Fetch updated lobby to broadcast
+	// Fetch updated lobby to broadcast to remaining participants
 	updatedLobby, err := s.lobbyRepo.GetByID(ctx, lobbyID)
 	if err == nil && updatedLobby != nil {
 		websocket.GlobalHub.BroadcastToLobby(lobbyID, "LOBBY_UPDATED", toLobbyDTO(updatedLobby))
@@ -279,7 +290,17 @@ func (s *lobbyService) StartAuction(ctx context.Context, userID string, lobbyID 
 		websocket.GlobalHub.BroadcastToLobby(lobbyID, "LOBBY_UPDATED", toLobbyDTO(updatedLobby))
 	}
 
+	// Initialize the Auction Room and start the first round
+	_, err = s.auctionService.InitializeAuction(ctx, lobbyID)
+	if err != nil {
+		return http.StatusInternalServerError, fmt.Errorf("failed to initialize auction room: %w", err)
+	}
+
 	return http.StatusOK, nil
+}
+
+func (s *lobbyService) PlaceBid(ctx context.Context, lobbyID string, userID string, amount int) error {
+	return s.auctionService.PlaceBid(ctx, lobbyID, userID, amount)
 }
 
 // resolveUsername fetches the username for a given userID; falls back to empty string on error.
@@ -344,4 +365,67 @@ func toLobbyDTO(lobby *models.Lobby) *dto.LobbyResponse {
 		Participants: participants,
 		CreatedAt:    lobby.CreatedAt.Format("2006-01-02T15:04:05Z"),
 	}
+}
+
+func (s *lobbyService) GetAuctionRoom(ctx context.Context, lobbyID string) (interface{}, error) {
+	return s.auctionService.GetAuctionRoom(ctx, lobbyID)
+}
+
+func (s *lobbyService) ToggleAuction(ctx context.Context, lobbyID string, action string) error {
+	return s.auctionService.ToggleAuctionState(ctx, lobbyID, action)
+}
+
+func (s *lobbyService) HandleHostPresenceChange(ctx context.Context, lobbyID string, isPresent bool) error {
+	return s.auctionService.HandleHostPresenceChange(ctx, lobbyID, isPresent)
+}
+
+func (s *lobbyService) GetLobbySquads(ctx context.Context, lobbyID string) (interface{}, error) {
+	lobby, err := s.lobbyRepo.GetByID(ctx, lobbyID)
+	if err != nil {
+		return nil, err
+	}
+
+	room, _ := s.auctionService.(*auctionService).auctionRepo.GetByLobbyID(ctx, lobbyID)
+	soldPrices := make(map[string]int)
+	if room != nil {
+		for _, sp := range room.SoldPlayers {
+			soldPrices[sp.PlayerID.Hex()] = sp.SoldPrice
+		}
+	}
+
+	result := []map[string]interface{}{}
+	for _, p := range lobby.Participants {
+		playerIDs := []string{}
+		for _, id := range p.Squad {
+			playerIDs = append(playerIDs, id.Hex())
+		}
+		players, _ := s.auctionService.(*auctionService).playerRepo.GetMany(ctx, playerIDs)
+
+		enrichedPlayers := []map[string]interface{}{}
+		for _, pl := range players {
+			price := pl.BasePrice
+			if sp, ok := soldPrices[pl.ID.Hex()]; ok {
+				price = sp
+			}
+			enrichedPlayers = append(enrichedPlayers, map[string]interface{}{
+				"id":          pl.ID.Hex(),
+				"name":        pl.Name,
+				"role":        pl.Role,
+				"nationality": pl.Nationality,
+				"category":    pl.Category,
+				"basePrice":   pl.BasePrice,
+				"imageUrl":    pl.ImageUrl,
+				"soldPrice":   price,
+			})
+		}
+
+		result = append(result, map[string]interface{}{
+			"userID":         p.UserID.Hex(),
+			"teamName":       p.TeamName,
+			"iplTeam":        p.IplTeam,
+			"purseRemaining": p.PurseRemaining,
+			"squad":          enrichedPlayers,
+		})
+	}
+	return result, nil
 }

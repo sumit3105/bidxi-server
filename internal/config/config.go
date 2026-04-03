@@ -35,9 +35,9 @@ func Load() {
 		expiryHours = 24
 	}
 
-	rateLimitRPM, err := strconv.Atoi(getEnv("RATE_LIMIT_RPM", "30"))
+	rateLimitRPM, err := strconv.Atoi(getEnv("RATE_LIMIT_RPM", "3000"))
 	if err != nil {
-		rateLimitRPM = 30
+		rateLimitRPM = 3000
 	}
 
 	AppConfig = &Config{
