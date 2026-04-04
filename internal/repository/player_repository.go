@@ -20,6 +20,7 @@ type PlayerRepository interface {
 	GetAll(ctx context.Context) ([]*models.Player, error)
 	GetByID(ctx context.Context, id string) (*models.Player, error)
 	GetMany(ctx context.Context, ids []string) ([]*models.Player, error)
+	Update(ctx context.Context, player *models.Player) error
 	Count(ctx context.Context) (int64, error)
 	ClearAll(ctx context.Context) error
 }
@@ -95,6 +96,11 @@ func (r *playerRepository) GetMany(ctx context.Context, ids []string) ([]*models
 
 func (r *playerRepository) Count(ctx context.Context) (int64, error) {
 	return r.collection().CountDocuments(ctx, bson.M{})
+}
+
+func (r *playerRepository) Update(ctx context.Context, player *models.Player) error {
+	_, err := r.collection().ReplaceOne(ctx, bson.M{"_id": player.ID}, player)
+	return err
 }
 
 func (r *playerRepository) ClearAll(ctx context.Context) error {

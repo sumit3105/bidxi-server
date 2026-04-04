@@ -263,7 +263,7 @@ func (s *auctionService) PlaceBid(ctx context.Context, lobbyID string, userID st
 	}
 
 	uid, _ := primitive.ObjectIDFromHex(userID)
-	if room.HighestBidderID == uid {
+	if !room.HighestBidderID.IsZero() && room.HighestBidderID == uid {
 		return fmt.Errorf("you are already the highest bidder")
 	}
 

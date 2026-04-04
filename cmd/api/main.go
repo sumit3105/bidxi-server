@@ -59,6 +59,11 @@ func main() {
 		log.Printf("⚠️  Warning: Failed to seed players: %v", err)
 	}
 
+	// Migrate player image URLs to latest working ones
+	if err := playerService.UpdateImageUrls(context.Background()); err != nil {
+		log.Printf("⚠️  Warning: Failed to update image URLs: %v", err)
+	}
+
 	// Initialize handlers
 	authHandler := handler.NewAuthHandler(authService)
 	lobbyHandler := handler.NewLobbyHandler(lobbyService)
