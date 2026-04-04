@@ -26,7 +26,8 @@ var AppConfig *Config
 // Load reads environment variables (with .env fallback) and populates AppConfig.
 func Load() {
 	// Load .env file if it exists (ignored in production where env vars are set directly)
-	if err := godotenv.Load(); err != nil {
+	if err := godotenv.Load(".env"); err != nil {
+		log.Println(err.Error())
 		log.Println("No .env file found, using system environment variables")
 	}
 

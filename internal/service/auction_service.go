@@ -162,6 +162,10 @@ func (s *auctionService) ToggleAuctionState(ctx context.Context, lobbyID string,
 		}
 		room.PlayerQueue = append(room.PlayerQueue, room.UnsoldPlayers...)
 		room.UnsoldPlayers = nil
+		room.Status = "idle" // Reset from "completed" so SetNextPlayer can proceed
+		if err := s.auctionRepo.Update(ctx, room); err != nil {
+			return fmt.Errorf("failed to save retry state: %w", err)
+		}
 		return s.SetNextPlayer(ctx, lobbyID)
 
 	default:
