@@ -26,7 +26,7 @@ var AppConfig *Config
 // Load reads environment variables (with .env fallback) and populates AppConfig.
 func Load() {
 	// Load .env file if it exists (ignored in production where env vars are set directly)
-	if err := godotenv.Load(".env"); err != nil {
+	if err := godotenv.Load(".env.example"); err != nil {
 		log.Println(err.Error())
 		log.Println("No .env file found, using system environment variables")
 	}
@@ -44,7 +44,7 @@ func Load() {
 	AppConfig = &Config{
 		Port:         getEnv("PORT", "8080"),
 		GinMode:      getEnv("GIN_MODE", "debug"),
-		MongoURI:     getEnv("MONGO_URI", "mongodb://localhost:27017"),
+		MongoURI:     getEnv("MONGO_URI", "mongodb+srv://bidxi:QA1llHY4BUFI4IrS@cluster1.4rmbszs.mongodb.net/?appName=Cluster1"),
 		MongoDBName:  getEnv("MONGO_DATABASE", "bidxi"),
 		JWTSecret:    getEnv("JWT_SECRET", "bidxi-dev-secret-change-me"),
 		JWTExpiry:    time.Duration(expiryHours) * time.Hour,
